@@ -25,6 +25,14 @@ z = state * gamma      # not unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
 A no-op `to()` whose layout already matches returns the same object and emits
 no torch op.
 
+**Every op that torch spells with `dim=N` is named.** `stack`/`unstack`, `cat`,
+`split`, `select`, `take`, `cumsum`/`cumprod`, `argmax`/`argmin`, `topk`,
+`repeat_along`, `shift`/`roll`/`flip`/`pad`, `where`, comparisons, `l2_normalize`,
+and the unary maps (`silu`/`gelu`/`sigmoid`/`exp`/`log`/`cos`/`sin`/…) all take a
+`Dim`, never an integer axis. See [`EXAMPLES.md`](EXAMPLES.md) for the full tour
+of every operation category with higher-dimensional (not just row/column)
+examples.
+
 ## Why not einops / functorch.dim / named tensors?
 
 | | einops | functorch.dim | PyTorch named tensors | **sempyt** |
@@ -88,10 +96,14 @@ src/sempyt/
   tensor.py    NamedTensor, .to() / .raw() / named broadcast
   ops.py       contract outer read write reduce softmax
                pack unpack segment gather scan
+  structural.py stack unstack cat split select take cumsum argmax topk
+               repeat_along shift roll flip pad where ge/gt/le/lt l2_normalize
+               + unary maps (silu gelu sigmoid exp log cos sin …)
   policies.py  Real, SplitComplex, NativeComplex
   nn/          Linear RMSNorm LayerNorm Embed RoPE GLU
                SDPAAttention LinearAttention OuterProductMemory PhaseLUT
-  zoo/         gpt.py  qllm_pam.py  pands_vps.py  glm.py
+  zoo/         gpt.py bert.py glm.py mamba.py rwkv.py moe.py vsa.py
+               pands_vps.py qllm_pam.py
 ```
 
 Reference models in `zoo/` are proven bit-close against:
@@ -102,6 +114,11 @@ Reference models in `zoo/` are proven bit-close against:
 - pands v1 outer-product memory (parallel == chunked == recurrent) and v2
   `PhaseLUT` / `diag_scan`
 - a GLM/Kimi-style GQA + MoE block (forward + backward smoke)
+
+Further architectures written on the named surface (forward/backward + property
+tests): a Mamba-style selective SSM (`mamba.py`), an RWKV-style time/channel mix
+(`rwkv.py`), a true top-k Mixture-of-Experts (`moe.py`), a bidirectional BERT
+encoder (`bert.py`), and phasor VSA bind/bundle/cleanup (`vsa.py`).
 
 ## Kernel exit
 

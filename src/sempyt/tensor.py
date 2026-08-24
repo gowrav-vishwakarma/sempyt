@@ -226,6 +226,11 @@ class NamedTensor:
 
         return roll(self, over, shift)
 
+    def shift(self, over, by: int = 1, fill: float = 0.0) -> "NamedTensor":
+        from .structural import shift
+
+        return shift(self, over, by, fill)
+
     def repeat_along(self, over, times: int, new=None) -> "NamedTensor":
         from .structural import repeat_along
 

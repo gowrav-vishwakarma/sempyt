@@ -11,7 +11,7 @@ from typing import Callable, Optional, Sequence, Union
 
 import torch
 
-from .dim import Dim, ProductDim
+from .dim import Dim
 from .errors import ShapeError, disagree, missing
 from .ops import Index
 from .tensor import NamedTensor, named
@@ -69,7 +69,6 @@ def cat(tensors: Sequence[NamedTensor], over: DimOrName) -> NamedTensor:
     d = _resolve(ref, over)
     axis = ref.index(d)
     data = torch.cat([t.to(*ref.layout).data for t in tensors], dim=axis)
-    out = ProductDim(d, Dim("_catn", len(tensors))) if False else None
     # concatenation produces a fresh dim of summed size; keep the name, new object
     new_d = Dim(d.name, data.shape[axis], role=d.role)
     layout = tuple(new_d if x is d else x for x in ref.layout)
@@ -177,6 +176,20 @@ def flip(t: NamedTensor, over: DimOrName) -> NamedTensor:
     return NamedTensor(torch.flip(t.data, dims=[t.index(d)]), t.layout, t.policy, bind=False)
 
 
+def shift(t: NamedTensor, over: DimOrName, by: int = 1, fill: float = 0.0) -> NamedTensor:
+    """Non-circular shift along ``over`` by ``by`` steps, zero-filling the gap.
+
+    ``by > 0`` moves values toward larger indices (a causal "look back one").
+    """
+    d = _resolve(t, over)
+    axis = t.index(d)
+    data = torch.roll(t.data, shifts=by, dims=axis).clone()
+    idx = [slice(None)] * t.data.dim()
+    idx[axis] = slice(0, by) if by > 0 else slice(by, None)
+    data[tuple(idx)] = fill
+    return NamedTensor(data, t.layout, t.policy, bind=False)
+
+
 def roll(t: NamedTensor, over: DimOrName, shift: int) -> NamedTensor:
     d = _resolve(t, over)
     return NamedTensor(torch.roll(t.data, shifts=shift, dims=t.index(d)), t.layout, t.policy, bind=False)
@@ -217,6 +230,46 @@ def where(cond: NamedTensor, a: NamedTensor, b: NamedTensor) -> NamedTensor:
     aa = _align_to(a, canon)
     ba = _align_to(b, canon)
     return NamedTensor(torch.where(ca.bool(), aa, ba), tuple(canon), a.policy, bind=False)
+
+
+def _compare(a: NamedTensor, b, op) -> NamedTensor:
+    from .tensor import _align_to
+
+    if isinstance(b, NamedTensor):
+        canon = list(a.layout)
+        seen = {id(d) for d in canon}
+        for d in b.layout:
+            if id(d) not in seen:
+                canon.append(d)
+                seen.add(id(d))
+        aa = _align_to(a, canon)
+        bb = _align_to(b, canon)
+        return NamedTensor(op(aa, bb), tuple(canon), a.policy, bind=False)
+    return NamedTensor(op(a.data, b), a.layout, a.policy, bind=False)
+
+
+def ge(a: NamedTensor, b) -> NamedTensor:
+    return _compare(a, b, lambda x, y: x >= y)
+
+
+def gt(a: NamedTensor, b) -> NamedTensor:
+    return _compare(a, b, lambda x, y: x > y)
+
+
+def le(a: NamedTensor, b) -> NamedTensor:
+    return _compare(a, b, lambda x, y: x <= y)
+
+
+def lt(a: NamedTensor, b) -> NamedTensor:
+    return _compare(a, b, lambda x, y: x < y)
+
+
+def l2_normalize(t: NamedTensor, over: DimOrName, eps: float = 1e-12) -> NamedTensor:
+    """Unit-norm along a named axis (keeps layout)."""
+    d = _resolve(t, over)
+    axis = t.index(d)
+    norm = t.data.pow(2).sum(dim=axis, keepdim=True).clamp_min(eps).sqrt()
+    return NamedTensor(t.data / norm, t.layout, t.policy, bind=False)
 
 
 def apply(t: NamedTensor, fn: Callable[[torch.Tensor], torch.Tensor]) -> NamedTensor:

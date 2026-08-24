@@ -525,8 +525,6 @@ def _scan_recurrent(u: NamedTensor, decay: NamedTensor, over: Dim) -> NamedTenso
             outs.append(h)
     else:
         dd = decay.to(*[d for d in decay.layout if d is not over], over)
-        dec_data = _align_broadcast_data(dd.data[..., 0] * 0 + 1, dd, uu.layout[:-1])  # placeholder
-        # simpler: align each slice
         for t in range(T):
             sl = NamedTensor(dd.data[..., t], dd.layout[:-1], decay.policy, bind=False)
             dec = _align_broadcast(sl, uu.layout[:-1])
