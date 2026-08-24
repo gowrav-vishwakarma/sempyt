@@ -42,12 +42,21 @@ These are the two basic moves for "writing" to and "reading" from an associative
 ### 1. `outer` (The Write)
 Takes two lists and makes a grid. Every item in list A meets every item in list B.
 
-```
-v (di=2)      k (dj=3)            outer(v, k, over=(di, dj))
-[1]           [1, 0, 1]           Result (2x3)
-[2]      X                  =     [1, 0, 1]
-                                  [2, 0, 2]
-```
+| v (`di=2`) | value |
+|------------|-------|
+| i0         | 1     |
+| i1         | 2     |
+
+| k (`dj=3`) | d0 | d1 | d2 |
+|------------|----|----|-----|
+|            | 1  | 0  | 1   |
+
+| `outer(v, k)` (`di×dj`) | d0 | d1 | d2 |
+|-------------------------|----|----|-----|
+| i0                      | 1  | 0  | 1   |
+| i1                      | 2  | 0  | 2   |
+
+Each cell is `v[i] * k[j]` — all pairs at once.
 
 ### 2. `read` (The Read)
 The reverse: take a grid and a query list. "Look up" the value by matching axes and summing.
@@ -105,14 +114,26 @@ result = sp.at(table, ids, over=rows)
 **What:** Chop a long sequence into blocks.
 **When:** Handling long context in chunks.
 
-```
-x (time=5)                segment into (blocks=3, blen=2)
- t0 [0]                   block0: [0, 1]
- t1 [1]      --->         block1: [2, 3]
- t2 [2]                   block2: [4, 0] (padded with 0)
- t3 [3]
- t4 [4]
-```
+| time | value |
+|------|-------|
+| t0   | 0     |
+| t1   | 1     |
+| t2   | 2     |
+| t3   | 3     |
+| t4   | 4     |
+
+Folded into `(blocks=3, blen=2)` — tree view:
+
+| block | slot | value |
+|-------|------|-------|
+| b0    | s0   | 0     |
+|       | s1   | 1     |
+| b1    | s0   | 2     |
+|       | s1   | 3     |
+| b2    | s0   | 4     |
+|       | s1   | 0     |
+
+Last block is **padded** with 0 because `time=5` is not divisible by `blen=2`.
 
 ```python
 import torch
@@ -158,10 +179,38 @@ h = sp.scan(u, decay, over=time)
 **What:** Rename a dimension so it doesn't accidentally "match" itself.
 **Why:** In Self-Attention, we have one sequence. To calculate `query · key`, we need to match "query positions" against "key positions". If both axes are just named `time`, `contract` will try to sum them away!
 
+**2D result** — attention scores `(t_q=4, time=4)` after `contract(q.alias(t,tq), k, over=d)`:
+
+Each cell is "how much does query position `t_q` attend to key position `time`?"
+
+| t_q | t0 | t1 | t2 | t3 |
+|-----|----|----|----|-----|
+| q0  | ·  | ·  | ·  | ·   |
+| q1  | ·  | ·  | ·  | ·   |
+| q2  | ·  | ·  | ·  | ·   |
+| q3  | ·  | ·  | ·  | ·   |
+
+**4D before contraction** — batched multi-head Q and K: `(batch=2, heads=2, time=4, d=64)`.
+`alias` only renames one axis on Q; `contract(..., over=d)` sums away `d` and leaves
+`(batch, heads, t_q, time)` — a **folder of score matrices per head per batch**:
+
+| batch | head | t_q | t0 | t1 | t2 | t3 |
+|-------|------|-----|----|----|----|-----|
+| b0    | h0   | q0  | ·  | ·  | ·  | ·   |
+|       |      | q1  | ·  | ·  | ·  | ·   |
+|       | h1   | q0  | ·  | ·  | ·  | ·   |
+|       |      | q1  | ·  | ·  | ·  | ·   |
+| b1    | h0   | q0  | ·  | ·  | ·  | ·   |
+|       |      | q1  | ·  | ·  | ·  | ·   |
+|       | h1   | q0  | ·  | ·  | ·  | ·   |
+|       |      | q1  | ·  | ·  | ·  | ·   |
+
+(Shown with `time=2` query rows for space; real models use longer sequences.)
+
 ```python
 import torch
 import sempyt as sp
-from sempyt import dims, named
+from sempyt import dims, named, Dim
 
 # One sequence of length 4
 t, d = dims("time d", time=4, d=64)

@@ -23,17 +23,11 @@ A fused QKV projection is one wide axis of size 1536. You want to cut it into
 three pieces (q, k, v). Which axis do you cut? The `qkv` one. So you say
 `over=qkv_axis`.
 
-```
-x  (batch, tokens, qkv=1536)
-                qkv axis
-                 ↓
-batch   tokens  [ q | k | v ]      split(over=qkv_axis)
-                 |-------------|            -->
-                                          q (batch, tokens, 512)
-                                          k (batch, tokens, 512)
-                                          v (batch, tokens, 512)
-              (the 'qkv' axis is the one being chopped)
-```
+| layout | batch | tokens | qkv (1536 wide) |
+|--------|-------|--------|-----------------|
+| x      | ·     | ·      | q \| k \| v (512 each) |
+
+`split(over=qkv_axis)` → three tensors, each `(batch, tokens, 512)`.
 
 Our example table `x` has 2 rows and 3 columns. The header cell just labels
 the axes: read it as "columns c0/c1/c2 across the top, rows r0/r1 down the side".
@@ -191,12 +185,16 @@ This is the most confusing pair for beginners. Here is how to tell them apart:
 ### 1. `cat` (Concatenate) — Making a table bigger
 **Analogy:** Hiring more workers for the **same shift**. You just add more rows to your existing 2D table. The axis you are adding to *must already exist*.
 
-**Visual (Cat along `row`):**
+**Visual (Cat along `row`)** — one taller 2D table, `row=4`:
 
-| Shift A (`row=2, col=3`) | Shift B (`row=2, col=3`) | `cat([A, B], over=row)` |
-| :--- | :--- | :--- |
-| `[0, 1, 2]` <br> `[3, 4, 5]` | `[10, 11, 12]` <br> `[13, 14, 15]` | `[0, 1, 2]` <br> `[3, 4, 5]` <br> `[10, 11, 12]` <br> `[13, 14, 15]` |
-| | | (Row size becomes 4) |
+| row | c0 | c1 | c2 |
+|-----|----|----|-----|
+| r0  | 0  | 1  | 2   |
+| r1  | 3  | 4  | 5   |
+| r2  | 10 | 11 | 12  |
+| r3  | 13 | 14 | 15  |
+
+(Shift A's rows r0–r1 glued above Shift B's rows — same `col` axis, more rows.)
 
 ```python
 import torch
@@ -214,14 +212,37 @@ combined = sp.cat([shift_a, shift_b], over=r) # Shape is (row=4, col=3)
 ### 2. `stack` — Creating a new folder
 **Analogy:** Taking the Morning Shift table and the Night Shift table and putting them in a **Folder**. You aren't making the tables bigger; you are creating a **brand new axis** called "Shift Type". 
 
-**Visual (Stack into `shift`):**
+**Visual — two separate tables go *into* one 3-D folder:**
 
-```
-Shift A (row, col)        Shift B (row, col)         stack([A, B], into=shift)
-[0 1 2]                   [10 11 12]                 shift=0: [0 1 2] [3 4 5]
-[3 4 5]                   [13 14 15]        --->     shift=1: [10 11 12] [13 14 15]
-                                                     (Result is 3D)
-```
+Shift A (`row=2, col=3`) — morning:
+
+| row | c0 | c1 | c2 |
+|-----|----|----|-----|
+| r0  | 0  | 1  | 2   |
+| r1  | 3  | 4  | 5   |
+
+Shift B (`row=2, col=3`) — night:
+
+| row | c0 | c1 | c2 |
+|-----|----|----|-----|
+| r0  | 10 | 11 | 12  |
+| r1  | 13 | 14 | 15  |
+
+**After `stack([A, B], into=shift)` — tree view (shape `(shift=2, row=2, col=3)`):**
+
+Read the first column as the **folder tab**. Each tab holds one full 2×3 table.
+The blank cells under a tab mean "still the same shift slice".
+
+| shift   | row | c0 | c1 | c2 |
+|---------|-----|----|----|-----|
+| shift=0 | r0  | 0  | 1  | 2   |
+|         | r1  | 3  | 4  | 5   |
+| shift=1 | r0  | 10 | 11 | 12  |
+|         | r1  | 13 | 14 | 15  |
+
+Compare to `cat` above: `cat` made **one taller table** (`row=4`). `stack` kept
+each table the same size and added a **new axis** (`shift=2`) so you can pick
+"which table" with `select(folder, shift, 0)` or `select(folder, shift, 1)`.
 
 ```python
 import torch
@@ -242,10 +263,51 @@ folder = sp.stack([a, b], into=shift, at=r)
 
 ---
 
+## 3D example — `batch` folder of 2D tables
+
+A batch of two matrices: layout `(batch=2, row=2, col=3)`. Same tree pattern as
+[01 — Foundations](01-foundations.md); here the outer tab is `batch`.
+
+| batch | row | c0 | c1 | c2 |
+|-------|-----|----|----|-----|
+| b0    | r0  | 1  | 2  | 3   |
+|       | r1  | 4  | 5  | 6   |
+| b1    | r0  | 10 | 11 | 12  |
+|       | r1  | 13 | 14 | 15  |
+
+**`sum(x, over=col)`** — collapse columns inside each batch slice; `col` axis gone:
+
+| batch | value (sum across c0+c1+c2) |
+|-------|------------------------------|
+| b0    | r0→6, r1→15                  |
+| b1    | r0→33, r1→42                 |
+
+Result layout: `(batch=2, row=2)`.
+
+**`x.to(batch, col, row)`** — swap row/col inside every batch tab (a transpose per batch).
+
+---
+
 ## Other Useful Moves
 
 ### split — Cutting a wide table
-Used to split a fused QKV projection.
+Used to split a fused QKV projection. Tiny 3D example `(tokens=2, qkv=6)` → three `(tokens=2, dim=2)` pieces:
+
+| tokens | qkv (wide axis to cut) |
+|--------|------------------------|
+| t0     | q0 q1 \| k0 k1 \| v0 v1 |
+|        |  1  2 \|  3  4 \|  5  6 |
+| t1     |  7  8 \|  9 10 \| 11 12 |
+
+After `split(over=qkv, sizes=(2,2,2), names=(q,k,v))`:
+
+| piece | t0 | t1 |
+|-------|----|-----|
+| **q** | 1, 2 | 7, 8 |
+| **k** | 3, 4 | 9, 10 |
+| **v** | 5, 6 | 11, 12 |
+
+Each piece keeps `tokens`; the wide `qkv` axis is replaced by a named `q`, `k`, or `v` axis of size 2.
 
 ```python
 import torch
@@ -265,7 +327,20 @@ q, k, v = sp.split(x, over=qkv_axis, sizes=(512, 512, 512), names=(q_dim, k_dim,
 ```
 
 ### select — Picking one item
-Used to get the last token of a sequence.
+Used to get the last token of a sequence. From the 3D batch folder above, pick
+`batch=b1` and `row=r0` — the `batch` and `row` axes disappear, leaving one row vector:
+
+| col | c0 | c1 | c2 |
+|-----|----|----|-----|
+|     | 10 | 11 | 12  |
+
+From a `(tokens=3, feat=2)` table, `select(tokens, -1)` picks the last token row:
+
+| feat | f0 | f1 |
+|------|----|----|
+| t2   | 5  | 6  |
+
+(`tokens` axis gone; result is `(feat=2)`.)
 
 ```python
 import torch

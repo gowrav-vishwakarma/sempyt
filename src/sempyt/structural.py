@@ -7,6 +7,7 @@ over Dim objects. Think in N axes: name the axis you act on, not "row/column".
 
 from __future__ import annotations
 
+import math
 from typing import Callable, Optional, Sequence, Union
 
 import torch
@@ -61,16 +62,39 @@ def unstack(t: NamedTensor, over: DimOrName) -> list[NamedTensor]:
             for chunk in t.data.split(1, dim=axis)]
 
 
-def cat(tensors: Sequence[NamedTensor], over: DimOrName) -> NamedTensor:
-    """Concatenate along an existing named axis ``over``."""
+def cat(
+    tensors: Sequence[NamedTensor],
+    over: DimOrName,
+    into: Optional[Dim] = None,
+) -> NamedTensor:
+    """Concatenate along an existing named axis ``over``.
+
+    The concatenated axis is matched **by name**, so pieces may carry their own
+    Dim object of that name with their own size (chunked loops whose last chunk
+    is short). All other axes must be the same Dim identities as the first piece.
+    ``into`` names the joined axis (e.g. chunks back to the full ``time``);
+    by default a fresh Dim of the same name is created.
+    """
     if not tensors:
         raise ShapeError("cat: empty list")
     ref = tensors[0]
-    d = _resolve(ref, over)
+    # Resolve by name so a caller holding one chunk's Dim can join all of them.
+    d = _resolve(ref, over.name if isinstance(over, Dim) else over)
     axis = ref.index(d)
-    data = torch.cat([t.to(*ref.layout).data for t in tensors], dim=axis)
-    # concatenation produces a fresh dim of summed size; keep the name, new object
-    new_d = Dim(d.name, data.shape[axis], role=d.role)
+    aligned = []
+    for t in tensors:
+        own = _resolve(t, d.name)
+        target = tuple(own if x is d else x for x in ref.layout)
+        aligned.append(t.to(*target).data)
+    data = torch.cat(aligned, dim=axis)
+    if into is not None:
+        if into.size is not None and into.size != data.shape[axis]:
+            raise disagree(into, into.size, data.shape[axis])
+        into.bind(data.shape[axis])
+        new_d = into
+    else:
+        # concatenation produces a fresh dim of summed size; keep the name
+        new_d = Dim(d.name, data.shape[axis], role=d.role)
     layout = tuple(new_d if x is d else x for x in ref.layout)
     return NamedTensor(data, layout, ref.policy, bind=False)
 
@@ -90,6 +114,63 @@ def split(t: NamedTensor, over: DimOrName, sizes: Sequence[int], names: Sequence
         layout = tuple(nm if x is d else x for x in t.layout)
         out.append(NamedTensor(part, layout, t.policy, bind=False))
     return out
+
+
+def flatten(t: NamedTensor, dims: Sequence[DimOrName], into: Dim) -> NamedTensor:
+    """Merge several named axes into one, placed where the first of them was.
+
+    The merged axes are moved to be adjacent (in the order given) if they are
+    not already, then reshaped into ``into``. ``into`` binds to the product of
+    their sizes. Inverse of :func:`unflatten`.
+    """
+    resolved = [_resolve(t, d) for d in dims]
+    dim_ids = {id(d) for d in resolved}
+    positions = [t.index(d) for d in resolved]
+    first_pos = min(positions)
+    last_pos = max(positions)
+    before = [d for d in t.layout[:first_pos] if id(d) not in dim_ids]
+    after = [d for d in t.layout[last_pos + 1:] if id(d) not in dim_ids]
+    target = tuple(before) + tuple(resolved) + tuple(after)
+    moved = t.to(*target)
+    pos = len(before)
+    n = len(resolved)
+    total = 1
+    for d in resolved:
+        if d.size is None:
+            raise ShapeError(f"flatten: {d.name} has no bound size")
+        total *= d.size
+    if into.size is None:
+        into.bind(total)
+    elif into.size != total:
+        raise disagree(into, into.size, total)
+    data = moved.data.reshape(*moved.data.shape[:pos], total, *moved.data.shape[pos + n:])
+    layout = tuple(before) + (into,) + tuple(after)
+    return NamedTensor(data, layout, t.policy, bind=False)
+
+
+def unflatten(t: NamedTensor, over: DimOrName, into: Sequence[Dim]) -> NamedTensor:
+    """Split one named axis into several (inverse of :func:`flatten`).
+
+    Each dim in ``into`` must have a bound size; their product must equal
+    ``over``'s size. The new axes replace ``over`` in place.
+    """
+    d = _resolve(t, over)
+    axis = t.index(d)
+    if d.size is None:
+        raise ShapeError(f"unflatten: {d.name} has no bound size")
+    sizes = []
+    for x in into:
+        if x.size is None:
+            raise ShapeError(f"unflatten: {x.name} has no bound size")
+        sizes.append(x.size)
+    if math.prod(sizes) != d.size:
+        raise ShapeError(
+            f"unflatten: {sizes} product {math.prod(sizes)} != {d.name}({d.size})"
+        )
+    data = t.data.reshape(*t.data.shape[:axis], *sizes, *t.data.shape[axis + 1:])
+    layout = list(t.layout)
+    layout[axis:axis + 1] = list(into)
+    return NamedTensor(data, tuple(layout), t.policy, bind=False)
 
 
 def select(t: NamedTensor, over: DimOrName, index: int) -> NamedTensor:
@@ -248,6 +329,14 @@ def _compare(a: NamedTensor, b, op) -> NamedTensor:
     return NamedTensor(op(a.data, b), a.layout, a.policy, bind=False)
 
 
+def eq(a: NamedTensor, b) -> NamedTensor:
+    return _compare(a, b, lambda x, y: x == y)
+
+
+def ne(a: NamedTensor, b) -> NamedTensor:
+    return _compare(a, b, lambda x, y: x != y)
+
+
 def ge(a: NamedTensor, b) -> NamedTensor:
     return _compare(a, b, lambda x, y: x >= y)
 
@@ -315,6 +404,64 @@ def clamp(t: NamedTensor, min=None, max=None) -> NamedTensor:  # noqa: A002
 
 def zeros_like(t: NamedTensor) -> NamedTensor:
     return NamedTensor(torch.zeros_like(t.data), t.layout, t.policy, bind=False)
+
+
+# --------------------------------------------------------------------------- #
+# constructors — build a tensor from named axes, never from a shape tuple
+# --------------------------------------------------------------------------- #
+def _sizes(layout: Sequence[Dim]) -> list[int]:
+    out = []
+    for d in layout:
+        if d.size is None:
+            raise ShapeError(f"constructor: {d.name} has no bound size")
+        out.append(d.size)
+    return out
+
+
+def full(value: float, *layout: Dim, policy=None, device=None, dtype=None) -> NamedTensor:
+    """Constant tensor shaped by named axes: ``full(0.0, batch, heads, time)``."""
+    data = torch.full(_sizes(layout), value, device=device, dtype=dtype)
+    return NamedTensor(data, layout, policy, bind=False)
+
+
+def zeros(*layout: Dim, policy=None, device=None, dtype=None) -> NamedTensor:
+    """Zeros shaped by named axes (replaces ``torch.zeros`` + shape bookkeeping)."""
+    data = torch.zeros(_sizes(layout), device=device, dtype=dtype)
+    return NamedTensor(data, layout, policy, bind=False)
+
+
+def ones(*layout: Dim, policy=None, device=None, dtype=None) -> NamedTensor:
+    """Ones shaped by named axes."""
+    data = torch.ones(_sizes(layout), device=device, dtype=dtype)
+    return NamedTensor(data, layout, policy, bind=False)
+
+
+def arange(over: Dim, *, device=None, dtype=None) -> NamedTensor:
+    """Positions ``0..over.size-1`` as a tensor on the ``over`` axis."""
+    if over.size is None:
+        raise ShapeError(f"arange: {over.name} has no bound size")
+    data = torch.arange(over.size, device=device, dtype=dtype)
+    return NamedTensor(data, (over,), None, bind=False)
+
+
+def eye(rows: Dim, cols: Dim, *, device=None, dtype=None) -> NamedTensor:
+    """Identity matrix on two named axes of equal size."""
+    if rows.size != cols.size:
+        raise disagree(rows, rows.size, cols.size, other=cols)
+    data = torch.eye(rows.size, device=device, dtype=dtype)
+    return NamedTensor(data, (rows, cols), None, bind=False)
+
+
+def tril_mask(rows: Dim, cols: Dim, *, diagonal: int = 0, device=None, dtype=None) -> NamedTensor:
+    """Lower-triangular 0/1 mask on ``(rows, cols)``.
+
+    ``diagonal=0`` keeps the diagonal (causal-inclusive); ``diagonal=-1`` drops
+    it (strictly-past). Named replacement for ``torch.tril(torch.ones(...))``.
+    """
+    data = torch.tril(
+        torch.ones(rows.size, cols.size, device=device, dtype=dtype), diagonal
+    )
+    return NamedTensor(data, (rows, cols), None, bind=False)
 
 
 def full_like(t: NamedTensor, value: float) -> NamedTensor:

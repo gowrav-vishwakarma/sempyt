@@ -37,20 +37,95 @@ and the unary maps (`silu`/`gelu`/`sigmoid`/`exp`/`log`/`cos`/`sin`/…) all tak
 of every operation category with higher-dimensional (not just row/column)
 examples.
 
-## Why not einops / functorch.dim / named tensors?
+## Why we built this
 
-| | einops | functorch.dim | PyTorch named tensors | **sempyt** |
-|---|---|---|---|---|
-| Axis identity | strings, per-call | Dim objects | strings (removed mid-2026) | **Dim objects** |
-| Size correlation | kwargs at every unflatten | yes | no | **yes, with file:line provenance** |
-| `x.shape[0]` | works (bad) | works | works | **TypeError — `.shape` is keyed by Dim** |
-| contract / outer / scan / segment / LUT | no | no | no | **yes** |
-| Complex algebra | no | no | no | **pluggable policy** |
-| `torch.compile` | clean | hostile (bytecode naming) | gone | **pytree dataclass, fullgraph-clean** |
-| FlashAttention / Triton | you already unwrap | subclass issues | n/a | **explicit `.raw(*dims)`** |
+PyTorch had a brief named-tensor experiment, but it was removed in mid-2026.
+That leaves researchers with two choices: juggle `dim=0,1,2,3` indices, or use
+`einops` strings on every call. Both force you to spend brain cycles on *where* an
+axis is instead of *what* it means.
 
-einops' string syntax is still accepted as an *optional* front door
-(`x.to("B H T d")` / `x.to("B (H d)")`) and parses to the same Dim objects.
+When you are doing R&D, you want to think in terms of the logic:
+
+- "the query is over `Tq`, the key is over `Tk`, contract over `d`"
+- "decay `gamma` is per head, so broadcast it over `B` and `T`"
+- "split the fused QKV into `slot`, `heads`, `head_dim`"
+
+You do **not** want to mentally map `B=0, T=1, H=2, d=3`, count `.unsqueeze()`
+calls, or remember which `.transpose()` you did five lines ago. sempyt brings
+named axes back as first-class objects, so the code reads like the idea and
+the compiler sorts out the indices.
+
+## Torch vs. others vs. sempyt
+
+### Attention scores: "contract over `d`"
+
+```python
+# raw PyTorch: you track positions and write permutations
+def attention_scores_torch(q, k):
+    # q: (B, Tq, H, d)   k: (B, Tk, H, d)
+    q_t = q.transpose(1, 2)              # (B, H, Tq, d)
+    k_t = k.transpose(1, 2).transpose(2, 3)  # (B, H, d, Tk)
+    scores = torch.matmul(q_t, k_t)      # (B, H, Tq, Tk)
+    return scores.permute(0, 2, 1, 3)      # back to (B, Tq, H, Tk)
+
+# einops: clearer, but you re-declare strings on every call
+from einops import einsum
+def attention_scores_einops(q, k):
+    return einsum(q, k, "B Tq H d, B Tk H d -> B Tq H Tk")
+
+# sempyt: the names are objects you define once, the code is the idea
+from sempyt import dims, named, contract
+B, Tq, Tk, H, d = dims("B Tq Tk H d")
+scores = contract(q.alias(T, Tq), k.alias(T, Tk), over=d)   # (B, Tq, H, Tk)
+```
+
+### Broadcasting: "multiply `state` by per-head `gamma`"
+
+```python
+# raw PyTorch: how many unsqueezes? depends on where H is
+gamma = torch.sigmoid(decay_bias)      # (H,)
+if gamma.dim() == state.dim() - 3:
+    gamma = gamma.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+else:
+    gamma = gamma.unsqueeze(-2).unsqueeze(-1)
+state = state * gamma
+
+# sempyt: the broadcast is automatic because H is just a named axis
+state = state * named(gamma, (H,))
+```
+
+### Splitting fused QKV
+
+```python
+# raw PyTorch: reshape, permute, contiguous, slice
+qkv = qkv.view(B, T, 3, H, d, 2).transpose(1, 2).contiguous()
+q, k, v = qkv[:, 0], qkv[:, 1], qkv[:, 2]
+
+# sempyt: name the fused axis, then un-name it into three named axes
+slot = Dim("slot", 3)
+qkv3 = Dim("qkv3", 3 * H.size * d.size)
+projected = linear(x)                         # (B, T, qkv3)
+split = projected.to(B, T, slot, H, d)        # (B, T, 3, H, d)
+q, k, v = split.select(slot, 0), \
+          split.select(slot, 1), \
+          split.select(slot, 2)
+```
+
+### Comparison table
+
+| | raw PyTorch | einops | functorch.dim | PyTorch named tensors | **sempyt** |
+|---|---|---|---|---|---|
+| Axis identity | integer indices | strings, per-call | Dim objects | strings (removed mid-2026) | **Dim objects** |
+| Size correlation | manual | no | yes | no | **yes, with file:line provenance** |
+| `x.shape[0]` | works (bad) | works | works | works | **TypeError — `.shape` is keyed by Dim** |
+| contract / outer / scan / segment / LUT | manual | no | no | no | **yes** |
+| Complex algebra | manual | no | no | no | **pluggable policy** |
+| `torch.compile` | clean | clean | hostile (bytecode naming) | gone | **pytree dataclass, fullgraph-clean** |
+| FlashAttention / Triton | native | you already unwrap | subclass issues | n/a | **explicit `.raw(*dims)`** |
+| Readability | "what axis is index 2?" | "what did I name it this time?" | good | good | **good, and the names are stable objects** |
+
+sempyt is not a replacement for PyTorch — it is a thin, readable front-end that
+still lets you drop to raw tensors at kernel boundaries.
 
 ## The pain this deletes
 
@@ -80,13 +155,48 @@ mass.raw(Kf, C, C)               # Kf = K * B * H  (ProductDim)
 pands `from_real(x, dim)` needed an out-of-band size because `2d` was anonymous.
 Here `d2 = px * d`; `x.to(B, d2)` / `x.to(B, px, d)` are exact inverses.
 
+## Origin
+
+sempyt was built while doing R&D in [`qllm2`](https://github.com/gowrav-vishwakarma/qllm2)
+— a language-model research repo. We needed a way to write attention, recurrent
+memory, and VSA/phase operations without constantly reverse-engineering which
+tensor index meant which logical axis. PyTorch named tensors were gone, and
+existing tools were either string-based or subclass-unfriendly, so we made
+sempyt: a small, object-first named-tensor wrapper over PyTorch that keeps the
+code close to the idea.
+
+## Status
+
+sempyt is **beta** and not yet published on PyPI. The API is still settling as we
+drive it from the R&D work in `qllm2`. Expect renames and small breaking changes
+until we tag a 1.0 release.
+
 ## Install
+
+### From a local clone
 
 ```bash
 cd /home/gowrav/Development/sempyt
 uv sync
 # or, against an existing torch:
 PYTHONPATH=src python -m pytest tests/
+```
+
+### From GitHub (once the repo is public)
+
+Because sempyt is not on PyPI, you can install it directly from a Git URL once it
+is pushed to GitHub. Replace the URL with the actual repository path:
+
+```bash
+pip install git+https://github.com/YOUR_USERNAME/sempyt.git
+```
+
+For editable development from a Git checkout:
+
+```bash
+git clone https://github.com/YOUR_USERNAME/sempyt.git
+cd sempyt
+pip install -e .
 ```
 
 Requires Python ≥ 3.10 and `torch>=2.8`. No other runtime dependencies.

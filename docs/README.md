@@ -7,6 +7,11 @@ PyTorch way (and the axis-counting traps) and finally the sempyt one-liner.
 You do not need to know linear algebra. Every operation is explained with
 visual before → after grids and plain-language analogies.
 
+**How to read the tables:** 2D tensors are a single grid (rows × columns). 3D and
+4D tensors use a **tree table** — left columns are folder tabs (`batch`, `shift`,
+`factory`, …); blank cells mean "still inside that slice"; the right columns are
+the inner 2D data. See [01 — Foundations](01-foundations.md) for the full 2D/3D/4D walkthrough.
+
 ## Reading Order
 
 1. [01 — Foundations: Tensors as Rosters](01-foundations.md)

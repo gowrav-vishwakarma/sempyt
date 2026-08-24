@@ -107,12 +107,15 @@ class ComplexRMSNorm(nn.Module):
 
     def forward(self, z: NamedTensor) -> NamedTensor:
         pair = self.pair
-        lead = [d for d in z.layout if d is not getattr(z.policy, "pair", None)][:-1]
-        zl = named(z.data, tuple(lead) + (self.dim, pair), z.policy)
+        lead = [d for d in z.layout if d is not self.dim and d is not pair]
+        zl = z.to(*lead, self.dim, pair)
         mag = zl.abs()
         rms = sqrt(mean(square(mag), over=self.dim) + self.eps)
         scaled = (mag / rms) * named(self.scale, (self.dim,))
-        return zl * (scaled / (mag + 1e-8))
+        # Dividing by the magnitude keeps the phase; guard it with the same
+        # epsilon `abs` used, not the (much larger) RMS epsilon.
+        mag_eps = getattr(z.policy, "abs_eps", self.eps)
+        return zl * (scaled / (mag + mag_eps))
 
 
 class RMSNorm(nn.Module):
@@ -229,19 +232,14 @@ class GLU(nn.Module):
         self.down = Linear(hidden, dim, bias=False)
 
     def forward(self, x: NamedTensor) -> NamedTensor:
-        return self.down(self.gate(x) * self.up(x))  # type: ignore[operator]
+        g = self.gate(x)
+        gated = named(self.act(g.data), g.layout, x.policy)
+        return self.down(gated * self.up(x))
 
 
 class SwiGLU(GLU):
     def __init__(self, dim: Dim, hidden: Dim):
         super().__init__(dim, hidden, act=F.silu)
-
-    def forward(self, x: NamedTensor) -> NamedTensor:
-        g = self.gate(x)
-        # apply silu on the hidden axis (last after Linear)
-        data = F.silu(g.data) * self.up(x).data
-        gated = named(data, g.layout, x.policy)
-        return self.down(gated)
 
 
 class SDPAAttention(nn.Module):

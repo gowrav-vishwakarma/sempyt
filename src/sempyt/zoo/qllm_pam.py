@@ -140,9 +140,7 @@ def fused_chunk_step(
     # y = weighted @ V  (complex)
     vr = named(v.data[..., 0], v.layout[:-1])
     vi = named(v.data[..., 1], v.layout[:-1])
-    or_ = contract(wr, vr, over=Tk)
-    oi = contract(wr, vi, over=Tk)
-    # wait: complex (wr+i wi) @ (vr+i vi) = wr@vr - wi@vi + i(wr@vi + wi@vr)
+    # complex (wr+i wi) @ (vr+i vi) = wr@vr - wi@vi + i(wr@vi + wi@vr)
     out_r = contract(wr, vr, over=Tk) - contract(wi, vi, over=Tk)
     out_i = contract(wr, vi, over=Tk) + contract(wi, vr, over=Tk)
     out = named(

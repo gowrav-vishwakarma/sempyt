@@ -448,6 +448,80 @@ def expand_legs(
 
 
 # ---------------------------------------------------------------------------
+# linear solves
+# ---------------------------------------------------------------------------
+def solve_triangular(
+    system: NamedTensor,
+    rhs: NamedTensor,
+    *,
+    over: tuple[Dim, Dim],
+    feature: Dim,
+    upper: bool = False,
+    unitriangular: bool = False,
+) -> NamedTensor:
+    """Solve ``system @ x = rhs`` for triangular ``system``.
+
+    ``over = (row, col)`` names the two square axes of ``system``; ``rhs`` is
+    indexed by ``row`` plus ``feature``, and the result is indexed by ``col``
+    plus ``feature``. Axes present only on one side become broadcast batch axes,
+    so a state-batched right-hand side reuses one system without any packing.
+
+    ``unitriangular=True`` assumes a unit diagonal and never reads it. For
+    SplitComplex inputs the solve runs in complex64 and the result is cast back
+    to the right-hand side dtype.
+    """
+    from .tensor import _align_to
+
+    row, col = over
+    if not system.has(row) or not system.has(col):
+        raise ShapeError(
+            f"solve_triangular: system {layout_str(system.layout)} needs both "
+            f"{row.name} and {col.name}"
+        )
+    if not rhs.has(row):
+        raise missing("solve_triangular", row, "rhs", rhs.layout)
+    if not rhs.has(feature):
+        raise missing("solve_triangular", feature, "rhs", rhs.layout)
+
+    pair = system.policy.pair if isinstance(system.policy, SplitComplex) else None
+    complex_solve = pair is not None and system.has(pair) and rhs.has(pair)
+
+    def _matrix_axes(t: NamedTensor, *keep: Dim) -> list[Dim]:
+        skip = {id(d) for d in keep}
+        if pair is not None:
+            skip.add(id(pair))
+        return [d for d in t.layout if id(d) not in skip]
+
+    batch: list[Dim] = _matrix_axes(system, row, col)
+    seen = {id(d) for d in batch}
+    for d in _matrix_axes(rhs, row, feature):
+        if id(d) not in seen:
+            batch.append(d)
+            seen.add(id(d))
+
+    system_canon = tuple(batch) + (row, col) + ((pair,) if complex_solve else ())
+    rhs_canon = tuple(batch) + (row, feature) + ((pair,) if complex_solve else ())
+    a = _align_to(system, system_canon)
+    b = _align_to(rhs, rhs_canon)
+
+    if complex_solve:
+        a = torch.complex(a[..., 0].float(), a[..., 1].float())
+        b = torch.complex(b[..., 0].float(), b[..., 1].float())
+    solution = torch.linalg.solve_triangular(
+        a, b, upper=upper, unitriangular=unitriangular
+    )
+    out_layout = tuple(batch) + (col, feature)
+    if complex_solve:
+        target = rhs.dtype
+        return as_complex(
+            NamedTensor(solution.real.to(target), out_layout, REAL, bind=False),
+            NamedTensor(solution.imag.to(target), out_layout, REAL, bind=False),
+            pair,
+        )
+    return NamedTensor(solution, out_layout, rhs.policy, bind=False)
+
+
+# ---------------------------------------------------------------------------
 # gather / Index / at
 # ---------------------------------------------------------------------------
 class Index:

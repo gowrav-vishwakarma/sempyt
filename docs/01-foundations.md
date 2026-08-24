@@ -36,6 +36,45 @@ This matrix has **shape** `(2, 3)`: 2 workers, 3 stations.
 - A 3-D tensor could be `shifts × workers × stations` (one roster matrix per shift).
 - A 4-D tensor could be `factories × shifts × workers × stations` (one folder per factory).
 
+### How we draw 2D / 3D / 4D in these docs
+
+Higher dimensions are hard to picture as one flat grid. We use a **tree table**:
+the left column(s) are **folder tabs** (outer axes). Blank cells under a tab mean
+"still inside that slice". The right columns are the inner 2D table.
+
+**2D** — one roster matrix `(worker=2, station=3)`:
+
+| worker | s0 | s1 | s2 |
+|--------|----|----|-----|
+| w0     | 1  | 2  | 3   |
+| w1     | 4  | 5  | 6   |
+
+**3D** — a folder of two rosters `(shift=2, worker=2, station=3)`:
+
+| shift   | worker | s0 | s1 | s2 |
+|---------|--------|----|----|-----|
+| shift=0 | w0     | 1  | 2  | 3   |
+|         | w1     | 4  | 5  | 6   |
+| shift=1 | w0     | 10 | 11 | 12  |
+|         | w1     | 13 | 14 | 15  |
+
+**4D** — two factories, each with the same shift folder `(factory=2, shift=2, worker=2, station=2)`:
+
+| factory | shift   | worker | s0 | s1 |
+|---------|---------|--------|----|-----|
+| f0      | shift=0 | w0     | 1  | 2   |
+|         |         | w1     | 3  | 4   |
+|         | shift=1 | w0     | 5  | 6   |
+|         |         | w1     | 7  | 8   |
+| f1      | shift=0 | w0     | 9  | 10  |
+|         |         | w1     | 11 | 12  |
+|         | shift=1 | w0     | 13 | 14  |
+|         |         | w1     | 15 | 16  |
+
+Read it inside-out: **station** columns are the cells, **worker** rows are inside
+each shift tab, **shift** tabs sit inside each **factory** tab. Rank 4 = four
+nested labels before you reach a single number.
+
 ---
 
 ## Why names matter (The "Who is on axis 1?" problem)
@@ -101,12 +140,23 @@ The result is matrix `C` (workers × stations).
 Each cell of `C` is the **dot product of one row of `A` with one column of `B`**.
 The "tasks" axis matches up and is summed away.
 
-```
-A (2x3)        B (3x2)          C = A @ B (2x2)
-[1 2 3]        [1 0]            [ 1*1+2*0+3*1   1*0+2*1+3*0 ]   [4  2]
-[4 5 6]   @    [0 1]      =     [ 4*1+5*0+6*1   4*0+5*1+6*0 ] = [10 5]
-               [1 0]
-```
+| A (`worker×task`) | | t0 | t1 | t2 |
+|-------------------|---|----|----|-----|
+| | w0 | 1 | 2 | 3 |
+| | w1 | 4 | 5 | 6 |
+
+| B (`task×station`) | | s0 | s1 |
+|--------------------|---|----|-----|
+| | t0 | 1 | 0 |
+| | t1 | 0 | 1 |
+| | t2 | 1 | 0 |
+
+| C = `contract(A, B, over=task)` (`worker×station`) | | s0 | s1 |
+|------------------------------------------------------|---|----|-----|
+| | w0 | 4 | 2 |
+| | w1 | 10 | 5 |
+
+Each cell is one row of A dotted with one column of B; the shared `task` axis is summed away.
 
 **The golden rule:** the touching (inner) sizes must match.
 `A` is `(2, 3)` and `B` is `(3, 2)`. The shared `3` (tasks) lines up.

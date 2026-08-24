@@ -36,12 +36,32 @@ PyTorch aligns shapes on the **right**. If you have `(batch, time, features)` an
 ### The sempyt Solution: Name Alignment
 In sempyt, broadcasting happens over the **union of named axes**. If both tensors share a `Dim` object, they line up automatically, no matter where they are in the shape.
 
-**Visual (Stretching `gain` over `x`):**
+**2D — stretch `gain(col)` across every row:**
 
-| gain (`col=3`) | x (`row=2, col=3`) | Result (`x * gain`) |
-| :--- | :--- | :--- |
-| `[10, 100, 1000]` | `[1, 2, 3]` <br> `[4, 5, 6]` | `[10, 200, 3000]` <br> `[40, 500, 6000]` |
-| (stretches down) | (stays same) | (multiplied vertically) |
+| gain (`col`) | c0 | c1 | c2 |
+|--------------|----|----|-----|
+|              | 10 | 100 | 1000 |
+
+| x (`row`, `col`) | c0 | c1 | c2 |
+|------------------|----|----|-----|
+| r0               | 1  | 2  | 3   |
+| r1               | 4  | 5  | 6   |
+
+| `x * gain` | c0 | c1 | c2 |
+|------------|----|----|-----|
+| r0         | 10 | 200 | 3000 |
+| r1         | 40 | 500 | 6000 |
+
+**3D — same idea with a `batch` tab** `(batch=2, row=2, col=3)` × `gain(col=3)`:
+
+| batch | row | c0 | c1 | c2 |
+|-------|-----|----|----|-----|
+| b0    | r0  | 1  | 2  | 3   |
+|       | r1  | 4  | 5  | 6   |
+| b1    | r0  | 10 | 11 | 12  |
+|       | r1  | 13 | 14 | 15  |
+
+`gain` has no `batch` or `row` axis — sempyt **reuses the same gain vector inside every batch tab and every row**. Same pattern as 2D, just nested deeper.
 
 ```python
 import torch
@@ -64,15 +84,28 @@ y = x * gain # No unsqueeze needed!
 **What:** Shrink an axis by combining all its numbers (summing them, averaging them).
 **When:** Computing total loss, attention scores, or feature norms.
 
-**Visual (Summing over `col`):**
+**2D — sum over `col`:**
 
-```
-x (row=2, col=3)          sum(over=col)           Result (row=2)
-  c0 c1 c2
-r0 [1 2 3]      --->      1 + 2 + 3      --->     r0 [ 6 ]
-r1 [4 5 6]      --->      4 + 5 + 6      --->     r1 [15 ]
-                                                  (col axis is gone)
-```
+| x | c0 | c1 | c2 |
+|---|----|----|-----|
+| r0 | 1 | 2 | 3 |
+| r1 | 4 | 5 | 6 |
+
+| `sum(over=col)` | total |
+|-----------------|-------|
+| r0              | 6     |
+| r1              | 15    |
+
+**3D — sum over `col` inside each `batch` tab** `(batch=2, row=2, col=3)`:
+
+| batch | row | total (c0+c1+c2) |
+|-------|-----|------------------|
+| b0    | r0  | 6                |
+|       | r1  | 15               |
+| b1    | r0  | 33               |
+|       | r1  | 42               |
+
+Result layout: `(batch=2, row=2)` — `col` axis gone, `batch` and `row` untouched.
 
 ```python
 import torch
@@ -136,10 +169,10 @@ vals, ids = sp.topk(x, over=c, k=2, kdim=K)
 **What:** Each step along the axis becomes the sum of "everything seen so far".
 **When:** Causal masks, probability sums.
 
-```
-Input x (col=4)        [ 1,   2,   3,   4  ]
-cumsum(over=col)  ---> [ 1, 1+2, 3+3, 6+4 ]  --->  [ 1, 3, 6, 10 ]
-```
+| | c0 | c1 | c2 | c3 |
+|---|----|----|----|-----|
+| x | 1 | 2 | 3 | 4 |
+| cumsum | 1 | 3 | 6 | 10 |
 
 ```python
 import torch
