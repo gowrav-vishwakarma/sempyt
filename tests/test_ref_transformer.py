@@ -1,18 +1,11 @@
-"""GPT zoo == pands TransformerLM with copied weights."""
-
-import sys
-from pathlib import Path
+"""GPT zoo == vendored GPT-2 reference baseline with copied weights."""
 
 import torch
 
 from sempyt.zoo.gpt import GPTConfig, GPTLM
 from sempyt.testing import assert_close
 
-_PANDS = Path("/home/gowrav/Development/pands")
-if str(_PANDS) not in sys.path:
-    sys.path.insert(0, str(_PANDS))
-
-from v1.transformer_baseline import TransformerConfig, TransformerLM  # noqa: E402
+from _ref.transformer_baseline import TransformerConfig, TransformerLM
 
 
 def test_gpt_matches_pands_baseline():
