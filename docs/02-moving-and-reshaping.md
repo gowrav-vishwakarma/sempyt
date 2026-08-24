@@ -41,11 +41,12 @@ You have a `(row, col)` table and want one total per row. Which axis do you
 collapse? The `col` one. So you say `over=col`.
 
 ```
-x  (row, col)
-   c0 c1 c2
-r0 [1  2  3]   sum(over=col)   -->   r0 [ 6 ]     (col is gone)
-r1 [4  5  6]                        r1 [15 ]
-   (collapse along the 'col' axis)
+                  columns  →   c0   c1   c2
+                              ┌────┬────┬────┐
+   rows  ↓   r0  │  1  │  2  │  3  │   sum(over=col)  →  r0 [ 6 ]   (col is gone)
+                  r1  │  4  │  5  │  6  │                     r1 [15 ]
+                              └────┴────┴────┘
+   (collapse along the 'col' axis: add across each row)
 ```
 
 ### Example 3 — `sum(x, over=row)` (yes, `over` can take `row`)
@@ -55,12 +56,12 @@ want one total per **column** (collapse the rows instead). Which axis do you
 collapse? The `row` one. So you say `over=row`.
 
 ```
-x  (row, col)
-   c0 c1 c2
-r0 [1  2  3]   sum(over=row)   -->   c0 [ 5 ]    (row is gone)
-r1 [4  5  6]                        c1 [ 7 ]
-                                       c2 [ 9 ]
-   (collapse along the 'row' axis)
+                  columns  →   c0   c1   c2
+                              ┌────┬────┬────┐
+   rows  ↓   r0  │  1  │  2  │  3  │   sum(over=row)  →  c0 [ 5 ]   (row is gone)
+                  r1  │  4  │  5  │  6  │                     c1 [ 7 ]
+                              └────┴────┴────┘                    c2 [ 9 ]
+   (collapse along the 'row' axis: add down each column)
 ```
 
 Side-by-side, the only difference is **which axis you name**:
@@ -107,10 +108,12 @@ If you remember one word from this page, remember **`over`**.
 
 ```
 x (row=2, col=3)          x.to(col, row)  ->  (col=3, row=2)
-   c0 c1 c2                    r0  r1
-r0 [0 1 2]                 c0 [ 0   3 ]
-r1 [3 4 5]                 c1 [ 1   4 ]
-                           c2 [ 2   5 ]
+            columns →  c0  c1  c2              columns →  r0  r1
+                      ┌───┬───┬───┐                      ┌────┬────┐
+   rows ↓    r0  │ 0 │ 1 │ 2 │      rows ↓   c0 │  0 │  3 │
+            r1  │ 3 │ 4 │ 5 │              c1 │  1 │  4 │
+                      └───┴───┴───┘              c2 │  2 │  5 │
+                                                 └────┴────┘
 ```
 
 **sempyt:** Name the order you want; the library works out the permute.
