@@ -48,6 +48,40 @@ r1 [4  5  6]                        r1 [15 ]
    (collapse along the 'col' axis)
 ```
 
+### Example 3 — `sum(x, over=row)` (yes, `over` can take `row`)
+
+`over` works for **any** named axis — `row` included. Same table, but now you
+want one total per **column** (collapse the rows instead). Which axis do you
+collapse? The `row` one. So you say `over=row`.
+
+```
+x  (row, col)
+   c0 c1 c2
+r0 [1  2  3]   sum(over=row)   -->   c0 [ 5 ]    (row is gone)
+r1 [4  5  6]                        c1 [ 7 ]
+                                       c2 [ 9 ]
+   (collapse along the 'row' axis)
+```
+
+Side-by-side, the only difference is **which axis you name**:
+
+| you want... | which axis disappears | call |
+|---|---|---|
+| one total per row | `col` | `sp.sum(x, over=col)` |
+| one total per column | `row` | `sp.sum(x, over=row)` |
+
+```python
+import torch
+import sempyt as sp
+from sempyt import dims, named
+
+row, col = dims("row col", row=2, col=3)
+x = named(torch.tensor([[1., 2., 3.], [4., 5., 6.]]), (row, col))
+
+per_row = sp.sum(x, over=col)   # [6, 15]    — one number per row
+per_col = sp.sum(x, over=row)   # [5, 7, 9]  — one number per column
+```
+
 ### The mental rule
 
 > When you see `over=SOMETHING`, ask: *"which axis is this operation acting
