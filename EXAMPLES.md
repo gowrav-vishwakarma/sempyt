@@ -1,5 +1,9 @@
 # sempyt by example
 
+> This is the terse reference. If you are new to tensors, start with the
+> beginner walkthrough in [`docs/`](docs/README.md) — it teaches each operation
+> with visual before/after grids and plain-language factory analogies.
+
 The one rule: **name the axis, never count it.** Anywhere PyTorch would make
 you write `dim=1`, `dim=-2`, `.transpose(1, 2)`, `.unsqueeze(-1)`,
 `x.reshape(B, H, T, d)`, `torch.stack(xs, dim=2)`, `topk(..., dim=-1)`, or

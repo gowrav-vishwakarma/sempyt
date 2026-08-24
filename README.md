@@ -1,5 +1,9 @@
 # sempyt
 
+> New to tensors? Start with the beginner walkthrough in [`docs/`](docs/README.md) —
+> it teaches matrices and every operation with visual before/after grids, then the
+> PyTorch way, then the sempyt one-liner.
+
 Named-dimension tensors over PyTorch. A tensor is declared with **Dim objects**
 (not strings, not integer axis indices). Every rearrange, broadcast, matmul,
 and reduction is expressed over those objects. The library lowers eagerly to
