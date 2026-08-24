@@ -7,6 +7,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from .. import structural as sp
 from ..dim import Dim, ProductDim
 from ..nn.layers import Linear, PhaseLUT
 from ..ops import contract, outer, scan
@@ -62,12 +63,13 @@ class OuterProductBand(nn.Module):
         g = named(gamma.view(1, H.size).expand(B, H.size), (batch, H))
         outs = []
         for t in range(T):
-            qt = named(q.data[:, :, t], (batch, H, d)).alias(d, self.dj)
-            kt = named(k.data[:, :, t], (batch, H, d)).alias(d, self.dj)
-            vt = named(v.data[:, :, t], (batch, H, d)).alias(d, self.di)
-            outs.append(contract(state, qt, over=self.dj).data)
+            qt = q.select(time, t).alias(d, self.dj)  # (batch, H, d)
+            kt = k.select(time, t).alias(d, self.dj)
+            vt = v.select(time, t).alias(d, self.di)
+            outs.append(contract(state, qt, over=self.dj))  # (batch, H, di)
             state = state * g + outer(vt, kt, (self.di, self.dj))
-        y = named(torch.stack(outs, dim=2), (batch, H, time, self.di))
+        # re-assemble the per-step reads along a fresh 'time' axis
+        y = sp.stack(outs, into=time, at=self.di)
         return self.o(y.alias(self.di, d).to(batch, time, self.inner)), state
 
     def parallel(self, x: NamedTensor, time: Dim, batch: Dim):

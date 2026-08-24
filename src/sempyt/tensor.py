@@ -185,6 +185,52 @@ class NamedTensor:
             raise ShapeError("@ needs a shared Dim to contract over")
         return contract(self, other, over=shared[-1])
 
+    def with_policy(self, policy) -> "NamedTensor":
+        """Reinterpret the same data under a different element policy."""
+        return NamedTensor(self.data, self.layout, policy, bind=False)
+
+    # -- named structural sugar (delegates to sempyt.structural) --------------
+    def select(self, over, index: int) -> "NamedTensor":
+        from .structural import select
+
+        return select(self, over, index)
+
+    def __getitem__(self, key) -> "NamedTensor":
+        """``x[dim, i]`` selects position ``i`` along ``dim`` (drops the axis)."""
+        if isinstance(key, tuple) and len(key) == 2:
+            return self.select(key[0], key[1])
+        raise TypeError("index a NamedTensor as x[dim, i]; other forms use named ops")
+
+    def take(self, over, start: int, length: int, new=None) -> "NamedTensor":
+        from .structural import take
+
+        return take(self, over, start, length, new)
+
+    def cumsum(self, over) -> "NamedTensor":
+        from .structural import cumsum
+
+        return cumsum(self, over)
+
+    def cumprod(self, over) -> "NamedTensor":
+        from .structural import cumprod
+
+        return cumprod(self, over)
+
+    def flip(self, over) -> "NamedTensor":
+        from .structural import flip
+
+        return flip(self, over)
+
+    def roll(self, over, shift: int) -> "NamedTensor":
+        from .structural import roll
+
+        return roll(self, over, shift)
+
+    def repeat_along(self, over, times: int, new=None) -> "NamedTensor":
+        from .structural import repeat_along
+
+        return repeat_along(self, over, times, new)
+
     # -- torch interop --------------------------------------------------------
     def float(self) -> "NamedTensor":
         return NamedTensor(self.data.float(), self.layout, self.policy, bind=False)

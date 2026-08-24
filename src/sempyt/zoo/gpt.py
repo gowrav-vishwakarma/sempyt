@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .. import structural as sp
 from ..dim import Dim, ProductDim
 from ..tensor import named
 
@@ -44,11 +45,21 @@ class CausalSelfAttention(nn.Module):
         B, T, C = x.layout
         qkv = F.linear(x.raw(B, T, C), self.qkv.weight, self.qkv.bias)
         qkv3 = Dim("qkv3", 3 * C.size)
-        split = named(qkv, (B, T, qkv3)).to(B, T, self.slot, self.H, self.d)
-        raw = split.to(B, self.slot, self.H, T, self.d).raw(B, self.slot, self.H, T, self.d)
-        q, k, v = raw[:, 0], raw[:, 1], raw[:, 2]
+        # split the packed projection along the named 'slot' axis (q/k/v)
+        packed = (
+            named(qkv, (B, T, qkv3))
+            .to(B, T, self.slot, self.H, self.d)
+            .to(B, self.slot, self.H, T, self.d)
+        )
+        q, k, v = sp.unstack(packed, self.slot)  # each (B, H, T, d)
         drop = self.attn_dropout.p if self.training else 0.0
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=True, dropout_p=drop)
+        y = F.scaled_dot_product_attention(
+            q.raw(B, self.H, T, self.d),
+            k.raw(B, self.H, T, self.d),
+            v.raw(B, self.H, T, self.d),
+            is_causal=True,
+            dropout_p=drop,
+        )
         yn = named(y, (B, self.H, T, self.d)).to(B, T, self.inner)
         out = F.linear(yn.data, self.out_proj.weight, self.out_proj.bias)
         return named(self.resid_dropout(out), (B, T, C))

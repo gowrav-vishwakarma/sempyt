@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .. import structural as sp
 from ..dim import Dim, ProductDim
 from ..nn.layers import Linear, RMSNorm, RoPE, SwiGLU
 from ..ops import softmax
@@ -64,36 +64,30 @@ class GLMBlock(nn.Module):
         q = self.q(x).to(batch, time, self.H, self.d)
         k = self.k(x).to(batch, time, self.Hkv, self.d)
         v = self.v(x).to(batch, time, self.Hkv, self.d)
-        # pack as split-real for RoPE (imag = 0) then unpack
+        # pack a zero imaginary part as a NEW named 'px' axis, then RoPE-cmul
         pol = SplitComplex(self.px)
+
         def as_c(t):
-            z = torch.stack([t.data, torch.zeros_like(t.data)], dim=-1)
-            return named(z, t.layout + (self.px,), pol)
+            return sp.stack([t, sp.zeros_like(t)], into=self.px).with_policy(pol)
 
         T = x.size(time)
         rope = named(self.rope.cache[:T].to(dtype=x.dtype, device=x.device), (time, self.d, self.px), pol)
-        q = (as_c(q) * rope).data[..., 0]
-        k = (as_c(k) * rope).data[..., 0]
-        q = named(q, (batch, time, self.H, self.d))
-        k = named(k, (batch, time, self.Hkv, self.d))
-        # repeat kv heads
-        k_raw = k.to(batch, self.Hkv, time, self.d).data
-        v_raw = v.to(batch, self.Hkv, time, self.d).data
-        k_raw = k_raw.repeat_interleave(self.repeats, dim=1)
-        v_raw = v_raw.repeat_interleave(self.repeats, dim=1)
-        q_raw = q.to(batch, self.H, time, self.d).raw(batch, self.H, time, self.d)
+        q = sp.select(as_c(q) * rope, self.px, 0)  # real part after complex rotation
+        k = sp.select(as_c(k) * rope, self.px, 0)
+        # expand kv heads to full head count by naming the axis, not dim=1
+        k = sp.repeat_along(k, self.Hkv, times=self.repeats, new=self.H)
+        v = sp.repeat_along(v, self.Hkv, times=self.repeats, new=self.H)
+        q_raw = q.raw(batch, self.H, time, self.d)
+        k_raw = k.raw(batch, self.H, time, self.d)
+        v_raw = v.raw(batch, self.H, time, self.d)
         y = F.scaled_dot_product_attention(q_raw, k_raw, v_raw, is_causal=True)
         yn = named(y, (batch, self.H, time, self.d))
         return self.o(yn.to(batch, time, self.inner))
 
     def _moe(self, x):
-        logits = self.router(x)
-        gates = softmax(logits, over=self.E)
-        topv, topi = torch.topk(gates.data, self.cfg.n_active, dim=-1)
-        topv = topv / topv.sum(dim=-1, keepdim=True)
-        # dense fallback for the smoke test: mix all experts weighted by softmax
-        acc = torch.zeros_like(x.data)
-        for e, expert in enumerate(self.experts):
-            w = gates.data[..., e].unsqueeze(-1)
-            acc = acc + w * expert(x).data
-        return named(acc, x.layout, x.policy)
+        # dense soft mixture over experts, addressed by the named E axis (no dim=-1).
+        gates = softmax(self.router(x), over=self.E)
+        acc = sp.zeros_like(x)
+        for w, expert in zip(sp.unstack(gates, self.E), self.experts):
+            acc = acc + w * expert(x)  # w:(batch,time) broadcasts over C
+        return acc
