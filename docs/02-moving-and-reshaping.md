@@ -7,6 +7,64 @@ move instead of *which axis by name*.
 
 ---
 
+## The `over` keyword — "which axis to act along"
+
+Before anything else, you need to know one word that appears in almost every
+sempyt call: **`over`**.
+
+**What it means:** `over` names the **axis the operation should run along**.
+It is the named replacement for PyTorch's `dim=...`.
+
+**Read it as:** "do this operation *along* the `over` axis".
+
+### Example 1 — `split(x, over=qkv_axis, ...)`
+
+A fused QKV projection is one wide axis of size 1536. You want to cut it into
+three pieces (q, k, v). Which axis do you cut? The `qkv` one. So you say
+`over=qkv_axis`.
+
+```
+x  (batch, tokens, qkv=1536)
+                qkv axis
+                 ↓
+batch   tokens  [ q | k | v ]      split(over=qkv_axis)
+                 |-------------|            -->
+                                          q (batch, tokens, 512)
+                                          k (batch, tokens, 512)
+                                          v (batch, tokens, 512)
+              (the 'qkv' axis is the one being chopped)
+```
+
+### Example 2 — `sum(x, over=col)`
+
+You have a `(row, col)` table and want one total per row. Which axis do you
+collapse? The `col` one. So you say `over=col`.
+
+```
+x  (row, col)
+   c0 c1 c2
+r0 [1  2  3]   sum(over=col)   -->   r0 [ 6 ]     (col is gone)
+r1 [4  5  6]                        r1 [15 ]
+   (collapse along the 'col' axis)
+```
+
+### The mental rule
+
+> When you see `over=SOMETHING`, ask: *"which axis is this operation acting
+> along?"* That axis is the one being chopped, collapsed, summed, scanned,
+> or matched up. The other axes are left alone (they are "batch").
+
+| PyTorch | sempyt | meaning |
+|---|---|---|
+| `x.sum(dim=1)` | `sp.sum(x, over=col)` | collapse the `col` axis |
+| `x.split(C, dim=2)` | `sp.split(x, over=qkv, ...)` | cut the `qkv` axis |
+| `torch.cat([a,b], dim=0)` | `sp.cat([a,b], over=row)` | glue along the `row` axis |
+| `A @ B` | `sp.contract(A, B, over=task)` | sum away the `task` axis |
+
+If you remember one word from this page, remember **`over`**.
+
+---
+
 ## `to(...)` — The Universal Rearrange
 
 **What:** Reorder, split, merge, or drop axes in one call.
