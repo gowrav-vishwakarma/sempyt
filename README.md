@@ -1,5 +1,7 @@
 # sempyt
 
+**Pronunciation:** *semantic PyTorch* → **sem-pi-T**.
+
 > New to tensors? Start with the beginner walkthrough in [`docs/`](docs/README.md) —
 > it teaches matrices and every operation with visual before/after grids, then the
 > PyTorch way, then the sempyt one-liner.
@@ -184,17 +186,16 @@ PYTHONPATH=src python -m pytest tests/
 
 ### From GitHub (once the repo is public)
 
-Because sempyt is not on PyPI, you can install it directly from a Git URL once it
-is pushed to GitHub. Replace the URL with the actual repository path:
+Because sempyt is not on PyPI, install it directly from the Git URL:
 
 ```bash
-pip install git+https://github.com/YOUR_USERNAME/sempyt.git
+pip install git+https://github.com/gowrav-vishwakarma/sempyt.git
 ```
 
 For editable development from a Git checkout:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/sempyt.git
+git clone https://github.com/gowrav-vishwakarma/sempyt.git
 cd sempyt
 pip install -e .
 ```
