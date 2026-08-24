@@ -2,7 +2,7 @@
 
 import torch
 
-from sempyt import Dim, NativeComplex, SplitComplex, named
+from sempyt import Dim, NativeComplex, SplitComplex, as_complex, imag, named, real
 from sempyt.testing import assert_close
 
 
@@ -62,3 +62,12 @@ def test_real_times_complex_broadcasts():
     scale = named(torch.randn(2, 4), (B, d))
     out = z * scale
     assert_close(out.data, z.data * scale.data.unsqueeze(-1))
+
+
+def test_real_imag_as_complex_roundtrip():
+    px = Dim("px", 2, role="complex_pair")
+    B, d = Dim("B", 2), Dim("d", 4)
+    z = named(torch.randn(2, 4, 2), (B, d, px), SplitComplex(px))
+    packed = as_complex(real(z), imag(z), px)
+    assert_close(packed.data, z.data)
+    assert packed.policy.pair is px

@@ -1,6 +1,8 @@
 """Named-axis nn layers. Parameters are plain ``nn.Parameter``; I/O is NamedTensor."""
 
 from .layers import (
+    ComplexLinear,
+    ComplexRMSNorm,
     Embed,
     FactorizedEmbed,
     GLU,
@@ -18,6 +20,8 @@ from .layers import (
 
 __all__ = [
     "Linear",
+    "ComplexLinear",
+    "ComplexRMSNorm",
     "RMSNorm",
     "LayerNorm",
     "Embed",

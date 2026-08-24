@@ -10,8 +10,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ..dim import Dim, ProductDim
-from ..ops import Index, at, contract, outer, softmax
+from ..ops import Index, as_complex, at, contract, imag, mean, outer, real, softmax
 from ..policies import REAL, SplitComplex
+from ..structural import sigmoid, square, sqrt
 from ..tensor import NamedTensor, named
 
 
@@ -41,6 +42,77 @@ class Linear(nn.Module):
         xl = x.to(*rest, self.inn)
         y = F.linear(xl.data, self.weight, self.bias)
         return named(y, rest + [self.out], x.policy)
+
+
+class ComplexLinear(nn.Module):
+    """Split-real complex linear: 4 real GEMMs via ``contract``.
+
+    Parameters are ``weight_real`` / ``weight_imag`` (and optional biases) so a
+    v13 ``state_dict`` loads without remapping. I/O is a NamedTensor under
+    ``SplitComplex``.
+    """
+
+    def __init__(self, inn: Dim, out: Dim, pair: Dim, bias: bool = True):
+        super().__init__()
+        if inn.size is None or out.size is None:
+            raise ValueError("ComplexLinear in/out Dims must be bound")
+        if pair.size is None:
+            pair.bind(2)
+        self.inn = inn
+        self.out = out
+        self.pair = pair
+        self.policy = SplitComplex(pair)
+        init_scale = (2 / (inn.size + out.size)) ** 0.5
+        self.weight_real = nn.Parameter(torch.empty(out.size, inn.size))
+        self.weight_imag = nn.Parameter(torch.empty(out.size, inn.size))
+        nn.init.orthogonal_(self.weight_real, gain=init_scale)
+        nn.init.orthogonal_(self.weight_imag, gain=init_scale)
+        if bias:
+            self.bias_real = nn.Parameter(torch.zeros(out.size))
+            self.bias_imag = nn.Parameter(torch.zeros(out.size))
+        else:
+            self.register_parameter("bias_real", None)
+            self.register_parameter("bias_imag", None)
+
+    def forward(self, x: NamedTensor) -> NamedTensor:
+        rest = [d for d in x.layout if d is not self.inn and d is not self.pair]
+        xl = x.to(*rest, self.inn, self.pair)
+        xr, xi = real(xl), imag(xl)
+        wr = named(self.weight_real, (self.out, self.inn))
+        wi = named(self.weight_imag, (self.out, self.inn))
+        yr = contract(xr, wr, over=self.inn) - contract(xi, wi, over=self.inn)
+        yi = contract(xr, wi, over=self.inn) + contract(xi, wr, over=self.inn)
+        if self.bias_real is not None:
+            yr = yr + named(self.bias_real, (self.out,))
+            yi = yi + named(self.bias_imag, (self.out,))
+        return as_complex(yr, yi, self.pair)
+
+
+class ComplexRMSNorm(nn.Module):
+    """Magnitude-only RMSNorm (phase preserved). v13 ``ComplexNorm`` math.
+
+    Parameter is ``scale`` (not ``weight``) to match v13 state_dict keys.
+    """
+
+    def __init__(self, dim: Dim, pair: Dim, eps: float = 1e-6):
+        super().__init__()
+        if dim.size is None:
+            raise ValueError("ComplexRMSNorm dim must be bound")
+        if pair.size is None:
+            pair.bind(2)
+        self.dim = dim
+        self.pair = pair
+        self.eps = eps
+        self.scale = nn.Parameter(torch.ones(dim.size))
+
+    def forward(self, z: NamedTensor) -> NamedTensor:
+        pair = self.pair
+        lead = [d for d in z.layout if d is not getattr(z.policy, "pair", None)][:-1]
+        zl = named(z.data, tuple(lead) + (self.dim, pair), z.policy)
+        mag = zl.abs()
+        rms = sqrt(mean(square(mag), over=self.dim) + self.eps)
+        scaled = (mag / rms) * named(self.scale, (self.dim,))
+        return zl * (scaled / (mag + 1e-8))
 
 
 class RMSNorm(nn.Module):

@@ -218,6 +218,38 @@ def write(
     return S + outer(u, kk, over)
 
 
+def real(z: NamedTensor) -> NamedTensor:
+    """Real part of a SplitComplex tensor. Drops the pair axis; policy becomes Real."""
+    pair = getattr(z.policy, "pair", None)
+    if pair is None or not z.has(pair):
+        raise ShapeError("real(): expected a SplitComplex tensor with a pair axis")
+    zl = z.to(*[d for d in z.layout if d is not pair], pair)
+    layout = tuple(d for d in zl.layout if d is not pair)
+    return NamedTensor(zl.data[..., 0], layout, REAL, bind=False)
+
+
+def imag(z: NamedTensor) -> NamedTensor:
+    """Imaginary part of a SplitComplex tensor. Drops the pair axis; policy becomes Real."""
+    pair = getattr(z.policy, "pair", None)
+    if pair is None or not z.has(pair):
+        raise ShapeError("imag(): expected a SplitComplex tensor with a pair axis")
+    zl = z.to(*[d for d in z.layout if d is not pair], pair)
+    layout = tuple(d for d in zl.layout if d is not pair)
+    return NamedTensor(zl.data[..., 1], layout, REAL, bind=False)
+
+
+def as_complex(re: NamedTensor, im: NamedTensor, pair: Dim) -> NamedTensor:
+    """Pack two real tensors of the same layout into SplitComplex ``[..., pair]``."""
+    if [id(d) for d in re.layout] != [id(d) for d in im.layout]:
+        raise ShapeError("as_complex: real/imag layouts must be identical")
+    if pair.size not in (None, 2):
+        raise ShapeError(f"as_complex: pair dim must have size 2, got {pair}")
+    if pair.size is None:
+        pair.bind(2)
+    data = torch.stack([re.data, im.data], dim=-1)
+    return NamedTensor(data, tuple(re.layout) + (pair,), SplitComplex(pair), bind=False)
+
+
 # ---------------------------------------------------------------------------
 # reductions / softmax
 # ---------------------------------------------------------------------------

@@ -4,6 +4,8 @@ import torch
 
 from sempyt import Dim, ProductDim, SplitComplex, named
 from sempyt.nn import (
+    ComplexLinear,
+    ComplexRMSNorm,
     Embed,
     FactorizedEmbed,
     GLU,
@@ -34,6 +36,21 @@ def test_linear_matches_torch_and_grads():
     assert_close(y.data, exp)
     y.data.sum().backward()
     assert layer.weight.grad is not None
+
+
+def test_complex_linear_and_rmsnorm():
+    inn, out, px = Dim("in", 8), Dim("out", 6), Dim("px", 2)
+    B, T = Dim("B", 2), Dim("T", 3)
+    pol = SplitComplex(px)
+    lin = ComplexLinear(inn, out, px, bias=True)
+    x = named(torch.randn(2, 3, 8, 2, requires_grad=True), (B, T, inn, px), pol)
+    y = lin(x)
+    assert y.layout[-2] is out and y.layout[-1] is px
+    y.data.sum().backward()
+    assert lin.weight_real.grad is not None
+    norm = ComplexRMSNorm(out, px)
+    z = norm(y.detach())
+    assert z.layout[-2] is out
 
 
 def test_rmsnorm_layernorm():
