@@ -1,32 +1,28 @@
-# Learn tensors with sempyt
+# Learn Tensors with sempyt
 
 This folder teaches you tensors from zero — what a matrix *is*, what each
 operation *does to the numbers*, and when you reach for it — then shows the
 PyTorch way (and the axis-counting traps) and finally the sempyt one-liner.
 
-You do not need to know linear algebra. Every operation is drawn as a
-before → after grid of small numbers, in plain language.
+You do not need to know linear algebra. Every operation is explained with
+visual before → after grids and plain-language analogies.
 
-## Reading order
+## Reading Order
 
-1. [01 — Matrices in plain English](01-matrices-in-plain-english.md)
-   What a scalar / vector / matrix / tensor is, using a factory analogy.
-   Dot products and matrix multiplication, worked out by hand.
+1. [01 — Foundations: Tensors as Rosters](01-foundations.md)
+   What a scalar / vector / matrix / tensor is. Dot products and matrix multiplication explained with a factory analogy.
 
-2. [02 — Reshaping and moving](02-reshaping-and-moving.md)
-   `to`, reshape, transpose, split, merge, stack, unstack, cat, select, take,
-   repeat, shift, roll, flip, pad — moving numbers around without doing math.
+2. [02 — Moving and Reshaping](02-moving-and-reshaping.md)
+   `to`, `stack` vs `cat`, `ProductDim` (the "Shipping Case"), split, select, and other ways to move numbers without doing math.
 
-3. [03 — Math and reductions](03-math-and-reductions.md)
-   Element-wise math, broadcasting, sum/mean/max/softmax, argmax/topk,
-   cumsum/cumprod — combining and shrinking numbers.
+3. [03 — Math and Reductions](03-math-and-reductions.md)
+   Element-wise math, broadcasting ("stretching"), sum/mean/max/softmax, and finding winners with argmax/topk.
 
-4. [04 — Tensor algebra](04-tensor-algebra.md)
-   contract (matmul), read (dot), outer, gather/at, segment, scan, conj, alias —
-   the "match aligned staff" operations, plus a dimension-rules cheatsheet.
+4. [04 — Tensor Algebra](04-tensor-algebra.md)
+   `contract` (matmul by name), Associative memory (`read` / `outer`), folding time with `segment`, and the "Running Total" (`scan`).
 
 5. [05 — Glossary](05-glossary.md)
-   Quick, example-first definitions of every term the other pages use.
+   Quick, example-first definitions of terms like rank, shape, and broadcasting.
 
 ## The one idea
 
