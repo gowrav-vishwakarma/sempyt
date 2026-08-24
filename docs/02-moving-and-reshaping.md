@@ -35,41 +35,52 @@ batch   tokens  [ q | k | v ]      split(over=qkv_axis)
               (the 'qkv' axis is the one being chopped)
 ```
 
+Our example table `x` has 2 rows and 3 columns. The header cell just labels
+the axes: read it as "columns c0/c1/c2 across the top, rows r0/r1 down the side".
+
+| x         | c0 | c1 | c2 |
+|-----------|----|----|----|
+| **r0**    | 1  | 2  | 3  |
+| **r1**    | 4  | 5  | 6  |
+
 ### Example 2 — `sum(x, over=col)`
 
-You have a `(row, col)` table and want one total per row. Which axis do you
-collapse? The `col` one. So you say `over=col`.
+You want one total **per row**. So you collapse the `col` axis: add the numbers
+*across* each row (`1+2+3` and `4+5+6`).
 
-```
-                  columns  →   c0   c1   c2
-                              ┌────┬────┬────┐
-   rows  ↓   r0  │  1  │  2  │  3  │   sum(over=col)  →  r0 [ 6 ]   (col is gone)
-                  r1  │  4  │  5  │  6  │                     r1 [15 ]
-                              └────┴────┴────┘
-   (collapse along the 'col' axis: add across each row)
-```
+| result of `sum(x, over=col)` | value |
+|------------------------------|-------|
+| **r0**                       | 6     |
+| **r1**                       | 15    |
+
+The `col` axis no longer exists. The result has just one axis left — `row` (size 2).
 
 ### Example 3 — `sum(x, over=row)` (yes, `over` can take `row`)
 
 `over` works for **any** named axis — `row` included. Same table, but now you
-want one total per **column** (collapse the rows instead). Which axis do you
-collapse? The `row` one. So you say `over=row`.
+want one total **per column**. So you collapse the `row` axis: add the numbers
+*down* each column (`1+4`, `2+5`, `3+6`).
 
-```
-                  columns  →   c0   c1   c2
-                              ┌────┬────┬────┐
-   rows  ↓   r0  │  1  │  2  │  3  │   sum(over=row)  →  c0 [ 5 ]   (row is gone)
-                  r1  │  4  │  5  │  6  │                     c1 [ 7 ]
-                              └────┴────┴────┘                    c2 [ 9 ]
-   (collapse along the 'row' axis: add down each column)
-```
+| result of `sum(x, over=row)` | value |
+|------------------------------|-------|
+| **c0**                       | 5     |
+| **c1**                       | 7     |
+| **c2**                       | 9     |
+
+The `row` axis no longer exists. The result has just one axis left — `col` (size 3).
+
+> **"the axis is gone" — what that really means.** After a sum, the collapsed
+> axis is removed from the tensor's list of axes. Example 3's result is a 1-D
+> tensor of 3 numbers whose only axis is `col`. Whether you *draw* those 3
+> numbers as a row or a column on screen is just presentation — sempyt only
+> tracks that there is one axis named `col`, and no `row` axis anymore.
 
 Side-by-side, the only difference is **which axis you name**:
 
-| you want... | which axis disappears | call |
-|---|---|---|
-| one total per row | `col` | `sp.sum(x, over=col)` |
-| one total per column | `row` | `sp.sum(x, over=row)` |
+| you want...            | which axis you collapse | call                     | result axis |
+|------------------------|-------------------------|--------------------------|-------------|
+| one total per row      | `col`                   | `sp.sum(x, over=col)`    | `row` (2)   |
+| one total per column   | `row`                   | `sp.sum(x, over=row)`    | `col` (3)   |
 
 ```python
 import torch
@@ -104,17 +115,23 @@ If you remember one word from this page, remember **`over`**.
 
 **What:** Reorder, split, merge, or drop axes in one call.
 **When:** Constantly — before a matmul, before a kernel, after a projection.
-**Visual:** Swap the two axes (a transpose).
+**Visual:** Swap the two axes (a transpose). The numbers stay the same; the roles
+of rows and columns switch.
 
-```
-x (row=2, col=3)          x.to(col, row)  ->  (col=3, row=2)
-            columns →  c0  c1  c2              columns →  r0  r1
-                      ┌───┬───┬───┐                      ┌────┬────┐
-   rows ↓    r0  │ 0 │ 1 │ 2 │      rows ↓   c0 │  0 │  3 │
-            r1  │ 3 │ 4 │ 5 │              c1 │  1 │  4 │
-                      └───┴───┴───┘              c2 │  2 │  5 │
-                                                 └────┴────┘
-```
+Before — `x` with layout `(row=2, col=3)`:
+
+| x      | c0 | c1 | c2 |
+|--------|----|----|----|
+| **r0** | 0  | 1  | 2  |
+| **r1** | 3  | 4  | 5  |
+
+After — `x.to(col, row)` with layout `(col=3, row=2)` (rows and columns swapped):
+
+| x.to(col, row) | r0 | r1 |
+|----------------|----|----|
+| **c0**         | 0  | 3  |
+| **c1**         | 1  | 4  |
+| **c2**         | 2  | 5  |
 
 **sempyt:** Name the order you want; the library works out the permute.
 
