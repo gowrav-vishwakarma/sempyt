@@ -385,7 +385,9 @@ def _flatten_nt(nt: NamedTensor):
     return [nt.data], (nt.layout, nt.policy)
 
 
-def _unflatten_nt(aux, children):
+def _unflatten_nt(children, aux):
+    if children[0] is None:
+        return None  # tree_map-style ops return None leaves; nothing to rebuild
     layout, policy = aux
     return NamedTensor(children[0], layout, policy, bind=False)
 
