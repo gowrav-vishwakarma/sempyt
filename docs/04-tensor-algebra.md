@@ -177,7 +177,62 @@ h = sp.scan(u, decay, over=time)
 ## `alias` — The "Identity" Switch
 
 **What:** Rename a dimension so it doesn't accidentally "match" itself.
-**Why:** In Self-Attention, we have one sequence. To calculate `query · key`, we need to match "query positions" against "key positions". If both axes are just named `time`, `contract` will try to sum them away!
+**Why:** In Self-Attention we have one physical sequence, but we conceptually need two views of it: a *query* position and a *key* position. If both Q and K keep the same `time` Dim object, `contract(..., over=d)` collapses the result to a single `time` axis — the query and key positions become the same thing, and the attention matrix is silently wrong.
+
+### The silent bug without `alias`
+
+Take a tiny 4-token sequence:
+
+```python
+import torch
+import sempyt as sp
+from sempyt import dims, named
+
+t, d = dims("time d", time=4, d=3)
+
+q = named(torch.tensor([[1, 0, 0],
+                        [0, 1, 0],
+                        [0, 0, 1],
+                        [1, 1, 1]]).float(), (t, d))
+
+k = named(torch.tensor([[1, 0, 0],
+                        [0, 1, 0],
+                        [0, 0, 1],
+                        [1, 1, 1]]).float(), (t, d))
+```
+
+If you write:
+
+```python
+scores = sp.contract(q, k, over=d)
+```
+
+`contract` sees that `t` is the **same Dim object** in both Q and K, so it keeps only one `time` axis. The result is:
+
+```python
+scores.shape == (t,)   # -> (4,)
+```
+
+It computed only the diagonal dot products: position 0 with position 0, position 1 with 1, and so on. Query position 0 can **never** attend to key position 1, 2, or 3. The code runs, but the attention matrix is missing.
+
+### How `alias` fixes it
+
+Give the query copy a new identity `t_q` without moving any data:
+
+```python
+from sempyt import Dim
+
+tq = Dim("t_q", 4)
+scores = sp.contract(q.alias(t, tq), k, over=d)
+```
+
+Now `t_q` and `t` are different Dim objects, so the result keeps both:
+
+```python
+scores.shape == (tq, t)   # -> (4, 4)
+```
+
+This is the full attention score matrix: every query position attends to every key position.
 
 **2D result** — attention scores `(t_q=4, time=4)` after `contract(q.alias(t,tq), k, over=d)`:
 
