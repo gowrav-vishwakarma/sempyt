@@ -132,3 +132,39 @@ def test_pack_unpack():
     assert y.data.shape == (2, 24)
     z = unpack(y, y.layout[-1], (H, d))
     assert_close(z.data, x.data)
+
+
+def test_scan_per_step_decay_is_exact_at_long_length():
+    """Per-step γ over 600 steps (Π γ ≈ 1e-28): chunked/parallel == recurrent,
+    with the decay broadcast over channels and a split-complex input."""
+    import torch
+    from sempyt import Dim, SplitComplex, named, scan
+    torch.manual_seed(0)
+    B, C, T, pair = Dim("B", 2), Dim("C", 3), Dim("T", 600), Dim("pair", 2)
+    g = named(0.85 + 0.1 * torch.rand(2, 600), (B, T))
+    u = named(torch.randn(2, 3, 600), (B, C, T))
+    rec = scan(u, g, over=T, mode="recurrent").to(B, C, T).data
+    for mode in ("parallel", "chunked"):
+        got = scan(u, g, over=T, mode=mode).to(B, C, T).data
+        assert torch.allclose(got, rec, atol=1e-4), (mode, (got - rec).abs().max())
+    z = named(torch.randn(2, 3, 2, 600), (B, C, pair, T), policy=SplitComplex(pair))
+    rec = scan(z, g, over=T, mode="recurrent").to(B, C, pair, T).data
+    got = scan(z, g, over=T, mode="chunked").to(B, C, pair, T).data
+    assert torch.allclose(got, rec, atol=1e-4), (got - rec).abs().max()
+
+
+def test_scan_per_step_decay_gradients_match_recurrent():
+    import torch
+    from sempyt import Dim, named, scan
+    torch.manual_seed(1)
+    B, C, T = Dim("B", 2), Dim("C", 4), Dim("T", 150)
+    g0 = (0.5 + 0.45 * torch.rand(2, 150)).requires_grad_(True)
+    u0 = torch.randn(2, 4, 150, requires_grad=True)
+    w = torch.randn(2, 4, 150)
+    grads = []
+    for mode in ("recurrent", "chunked"):
+        out = scan(named(u0, (B, C, T)), named(g0, (B, T)), over=T, mode=mode).to(B, C, T).data
+        gu, gg = torch.autograd.grad((out * w).sum(), (u0, g0))
+        grads.append((gu, gg))
+    assert torch.allclose(grads[0][0], grads[1][0], atol=1e-4)
+    assert torch.allclose(grads[0][1], grads[1][1], atol=1e-3)

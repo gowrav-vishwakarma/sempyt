@@ -672,18 +672,69 @@ def _scan_parallel(u: NamedTensor, decay: NamedTensor, over: Dim) -> NamedTensor
     return _scan_chunked(uu, decay, over, chunk=max(T, 1))
 
 
-def _scan_per_step_gamma(uu: NamedTensor, decay: NamedTensor, over: Dim) -> NamedTensor:
-    dd = decay.to(*[d for d in decay.layout if d is not over], over)
-    # a_t = cumprod γ
-    # align
-    dec = _align_broadcast(dd, uu.layout)
-    # dec shape matches uu
-    log_g = torch.log(dec.clamp_min(1e-12))
-    log_a = torch.cumsum(log_g, dim=-1)
-    a = torch.exp(log_a)
-    u_over_a = uu.data / a.clamp_min(1e-12)
-    h = a * torch.cumsum(u_over_a, dim=-1)
-    return NamedTensor(h, uu.layout, uu.policy, bind=False)
+def _scan_per_step_gamma(uu: NamedTensor, decay: NamedTensor, over: Dim,
+                         chunk: int = 64) -> NamedTensor:
+    r"""``h_t = γ_t h_{t-1} + u_t`` with a real per-step ``γ_t``, exact at any length.
+
+    Chunked in log space. With ``L_t = Σ_{k ≤ t} log γ_k`` counted from the
+    start of the chunk, inside the chunk
+
+        h_t = Σ_{s ≤ t} e^{L_t - L_s} u_s  +  e^{L_t} h_in ,
+
+    where every exponent is ≤ 0, so nothing overflows or underflows (the old
+    ``a · cumsum(u / a)`` form lost all precision once ``Π γ`` fell below
+    1e-12, e.g. after ~260 steps of γ = 0.9). The ``[c, c]`` decay matrix is
+    built only over the axes the decay actually has; the axes it broadcasts
+    over (channels, the complex pair) ride along as matrix columns, so the
+    matrix is never copied per channel. Chunks are carried one after another.
+    """
+    if isinstance(decay.policy, SplitComplex):
+        raise ShapeError("scan: a per-step decay must be real")
+    x = uu.data                                                  # time last
+    g = _align_broadcast(decay.to(*[d for d in decay.layout if d is not over], over),
+                         uu.layout)
+    nd, T = x.dim(), x.shape[-1]
+    lead = list(range(nd - 1))
+    carried = [i for i in lead if g.shape[i] == 1 and x.shape[i] != 1]   # decay broadcasts here
+    own = [i for i in lead if i not in carried]
+    # x -> [own..., T, K], g -> [own..., T]   (K = product of the carried axes)
+    xp = x.permute(*own, nd - 1, *carried)
+    carried_shape = [x.shape[i] for i in carried]
+    K = 1
+    for n in carried_shape:
+        K *= n
+    own_shape = [max(x.shape[i], g.shape[i]) for i in own]
+    xp = xp.reshape(*own_shape, T, K)
+    gp = g.permute(*own, nd - 1, *carried).reshape(*[g.shape[i] for i in own], T)
+    gp = gp.expand(*own_shape, T)
+
+    c = max(1, min(chunk, T))
+    pad = (-T) % c
+    if pad:
+        xp = F.pad(xp, (0, 0, 0, pad))
+        gp = F.pad(gp, (0, pad), value=1.0)
+    n_chunks = (T + pad) // c
+    xs = xp.reshape(*own_shape, n_chunks, c, K)
+    logg = torch.log(gp.float().clamp_min(1e-30)).reshape(*own_shape, n_chunks, c)
+    L = torch.cumsum(logg, dim=-1)                                # from each chunk start
+    diff = L.unsqueeze(-1) - L.unsqueeze(-2)                      # [.., n, t, s]
+    lower = torch.ones(c, c, dtype=torch.bool, device=x.device).tril()
+    M = torch.where(lower, torch.exp(diff.clamp(max=0.0)), torch.zeros((), device=x.device))
+    local = torch.matmul(M.to(xs.dtype), xs)                      # [.., n, c, K]
+    from_start = torch.exp(L).to(xs.dtype).unsqueeze(-1)          # [.., n, c, 1]
+    h = torch.zeros(*own_shape, K, dtype=xs.dtype, device=x.device)
+    blocks = []
+    for i in range(n_chunks):
+        blk = local[..., i, :, :] + from_start[..., i, :, :] * h.unsqueeze(-2)
+        blocks.append(blk)
+        h = blk[..., -1, :]
+    y = torch.cat(blocks, dim=-2)[..., :T, :]                     # [own..., T, K]
+    y = y.reshape(*own_shape, T, *carried_shape)
+    inverse = [0] * nd
+    for pos, axis in enumerate(own + [nd - 1] + carried):
+        inverse[axis] = pos
+    y = y.permute(*inverse)
+    return NamedTensor(y, uu.layout, uu.policy, bind=False)
 
 
 def _scan_chunked(u: NamedTensor, decay: NamedTensor, over: Dim, chunk: int) -> NamedTensor:
