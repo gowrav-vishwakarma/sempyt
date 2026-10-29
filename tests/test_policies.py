@@ -71,3 +71,20 @@ def test_real_imag_as_complex_roundtrip():
     packed = as_complex(real(z), imag(z), px)
     assert_close(packed.data, z.data)
     assert packed.policy.pair is px
+
+
+def test_split_complex_ops_refuse_pair_not_last():
+    """abs / conj / normalize read (re, im) from the last axis: if the pair
+    axis is elsewhere they must raise, not silently mix numbers."""
+    import pytest
+    import torch
+    from sempyt import Dim, ShapeError, SplitComplex, named
+    T, F, pair = Dim("T", 5), Dim("F", 3), Dim("pair", 2)
+    z_last = named(torch.randn(5, 3, 2), (T, F, pair), policy=SplitComplex(pair))
+    expect = torch.sqrt((z_last.data ** 2).sum(-1))
+    assert torch.allclose(z_last.abs().data, expect)
+    z_moved = z_last.to(T, pair, F)                    # pair no longer last
+    for op in (lambda z: z.abs(), lambda z: z.conj(), lambda z: z.normalize(F)):
+        with pytest.raises(ShapeError, match="must be last"):
+            op(z_moved)
+    assert torch.allclose(z_moved.to(T, F, pair).abs().data, expect)

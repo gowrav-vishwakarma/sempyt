@@ -128,10 +128,24 @@ class NamedTensor:
         raise ShapeError("use alias(old_dim, new_dim) — relabel-by-name is not identity-safe")
 
     # -- policy-level element ops ---------------------------------------------
+    def _require_pair_last(self, op: str) -> None:
+        """Split-complex element ops read (re, im) from the LAST axis. If the
+        pair axis is elsewhere (e.g. after ``scan``, which moves time last),
+        they would silently mix the wrong numbers, so refuse instead."""
+        pair = getattr(self.policy, "pair", None)
+        if (isinstance(self.policy, SplitComplex) and pair is not None
+                and any(d is pair for d in self.layout) and self.layout[-1] is not pair):
+            from .layout import layout_str
+            raise ShapeError(
+                f"{op}: split-complex pair axis {pair} must be last, got layout "
+                f"{layout_str(self.layout)}; move it with .to(..., {pair.name})")
+
     def conj(self) -> "NamedTensor":
+        self._require_pair_last("conj")
         return NamedTensor(self.policy.conj(self.data), self.layout, self.policy, bind=False)
 
     def abs(self) -> "NamedTensor":
+        self._require_pair_last("abs")
         data = self.policy.abs(self.data)
         if isinstance(self.policy, SplitComplex) and self.policy.pair is not None:
             layout = tuple(d for d in self.layout if d is not self.policy.pair)
@@ -139,6 +153,7 @@ class NamedTensor:
         return NamedTensor(data, self.layout, self.policy, bind=False)
 
     def normalize(self, over: Dim, eps: Optional[float] = None) -> "NamedTensor":
+        self._require_pair_last("normalize")
         idx = self.index(over)
         kwargs = {} if eps is None else {"eps": eps}
         out = self.policy.norm_vec(self.data, idx, **kwargs)
