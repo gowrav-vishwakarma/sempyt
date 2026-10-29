@@ -398,6 +398,28 @@ softplus = _make_unary("softplus", torch.nn.functional.softplus)
 square = _make_unary("square", torch.square)
 
 
+def rotate(x: NamedTensor, angle: NamedTensor, pair: DimOrName) -> NamedTensor:
+    r"""Turn every 2-vector along ``pair`` by ``angle`` radians.
+
+        (a, b)  ->  (a cos θ - b sin θ,  a sin θ + b cos θ)
+
+    This is ``z · e^{iθ}`` written over real numbers: RoPE, a learned
+    rotary clock and a phase-weighted read are all this one op. ``x`` holds
+    one plane per position on a size-2 ``pair`` axis; ``angle`` carries any
+    subset of ``x``'s other axes and broadcasts by name. When ``angle`` adds
+    no new axis, the result keeps ``x``'s layout.
+    """
+    p = _resolve(x, pair)
+    if p.size != 2:
+        raise ShapeError(f"rotate: pair axis {p} must have size 2")
+    a, b = select(x, p, 0), select(x, p, 1)
+    c, s = cos(angle), sin(angle)
+    turned = stack([a * c - b * s, a * s + b * c], into=p)
+    if {id(d) for d in turned.layout} == {id(d) for d in x.layout}:
+        return turned.to(*x.layout)
+    return turned
+
+
 def clamp(t: NamedTensor, min=None, max=None) -> NamedTensor:  # noqa: A002
     return NamedTensor(t.data.clamp(min=min, max=max), t.layout, t.policy, bind=False)
 

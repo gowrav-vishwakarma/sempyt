@@ -118,3 +118,25 @@ def test_unary_maps():
     torch.testing.assert_close(sp.silu(x).data, torch.nn.functional.silu(x.data))
     torch.testing.assert_close(sp.exp(x).data, x.data.exp())
     assert sp.relu(x).layout == (B, T)
+
+
+def test_rotate_is_complex_multiply():
+    """rotate((a, b), θ) == (a + ib) · e^{iθ}, with θ broadcast by name."""
+    B, H, P, two = Dim("B", 3), Dim("H", 4), Dim("P", 5), Dim("two", 2)
+    x = torch.randn(3, 4, 2, 5)                       # pair axis not last
+    theta = torch.randn(3, 4)                         # no P axis: broadcast
+    out = sp.rotate(named(x, (B, H, two, P)), named(theta, (B, H)), two)
+    assert [d.name for d in out.layout] == ["B", "H", "two", "P"]
+    z = torch.complex(x[:, :, 0], x[:, :, 1]) * torch.exp(1j * theta)[..., None]
+    got = out.data
+    assert torch.allclose(got[:, :, 0], z.real, atol=1e-6)
+    assert torch.allclose(got[:, :, 1], z.imag, atol=1e-6)
+
+
+def test_rotate_zero_angle_is_identity_and_keeps_grad():
+    B, two = Dim("B", 6), Dim("two", 2)
+    x = torch.randn(6, 2, requires_grad=True)
+    out = sp.rotate(named(x, (B, two)), named(torch.zeros(6), (B,)), two)
+    assert torch.equal(out.data, x)
+    out.data.sum().backward()
+    assert torch.equal(x.grad, torch.ones_like(x))
